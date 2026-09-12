@@ -1,0 +1,12 @@
+{
+  "_comment": "把下面的 a2desk 段落合并进你的 MCP 客户端配置；command 请改成 a2desk 可执行文件的绝对路径。",
+  "mcpServers": {
+    "a2desk": {
+      "command": "/absolute/path/to/a2desk/target/release/a2desk",
+      "args": [],
+      "env": {
+        "A2DESK_LOG": "info"
+      }
+    }
+  }
+}

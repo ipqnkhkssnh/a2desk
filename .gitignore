@@ -1,0 +1,24 @@
+# Rust build artifacts
+/target
+**/*.rs.bk
+
+# Local MCP client config (use mcp.example.json as template)
+mcp.json
+.mcp.json
+.env
+.env.*
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Logs & temp files
+*.log
+/tmp/

@@ -1,0 +1,39 @@
+[package]
+name = "a2desk"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Cross-platform desktop control MCP server (screen, mouse, keyboard, apps)"
+license = "MIT"
+default-run = "a2desk"
+
+[dependencies]
+rmcp = { version = "3", features = ["transport-io", "schemars", "server", "macros", "base64"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "time", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+thiserror = "2"
+base64 = "0.22"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Cross-platform desktop capture / monitor / window enumeration
+xcap = "0.9"
+# Cross-platform input simulation (mouse + keyboard)
+enigo = "0.6"
+# Process enumeration
+sysinfo = "0.39"
+# JPEG / PNG encoding for screenshots
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
+[target.'cfg(windows)'.dependencies]
+# SetCursorPos: enigo 的绝对移动在 Windows 上只覆盖主屏，用它支持多显示器
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+lto = "thin"
+strip = true
