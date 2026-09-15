@@ -215,6 +215,11 @@ pub fn close(id: u32) -> DeskResult<()> {
     Err(DeskError::WindowOp("无法定位关闭按钮".into()))
 }
 
+/// 平台侧最小化探测；上层已有 xcap.is_minimized，此处作补充
+pub fn is_minimized(_id: u32) -> bool {
+    false
+}
+
 fn pid_for_window_id(id: u32) -> DeskResult<u32> {
     use std::panic::AssertUnwindSafe;
     use xcap::Window;

@@ -285,7 +285,7 @@ struct LaunchAppParams {
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct ListWindowsParams {
-    /// 过滤：标题 / 应用名 / id / pid；可用 `|` 分隔
+    /// 过滤：标题 / 应用名 / id / pid / process_name；可用 `|` 分隔
     #[serde(default)]
     filter: Option<String>,
     #[serde(default)]
@@ -296,6 +296,9 @@ struct ListWindowsParams {
     /// 只返回可见窗口（未最小化且面积>1）
     #[serde(default)]
     only_visible: Option<bool>,
+    /// 过滤掉宽×高小于该值的窗口（默认 100，可传 0 关闭；用于去掉 16×16 辅助窗）
+    #[serde(default)]
+    min_area: Option<u32>,
     /// 排序：z（默认，越前越大）/ title / pid
     #[serde(default)]
     sort_by: Option<String>,
@@ -417,9 +420,33 @@ struct TypeInWindowParams {
     sel: WindowSelectParams,
     /// 要输入的文本
     text: String,
-    /// 每个字符间隔毫秒，0（默认）= 快速输入
+    /// 输入方式：`paste`（默认，绕过 IME）或 `type`（逐键模拟）
+    #[serde(default)]
+    input_mode: Option<String>,
+    /// 每个字符间隔毫秒（仅 input_mode=type 时有效），0=最快
     #[serde(default)]
     interval_ms: Option<u64>,
+    /// 是否先点击再输入，默认 true
+    #[serde(default)]
+    click: Option<bool>,
+    /// 相对窗口左上角的点击 X（与 click_y 成对；省略且无 anchor 时点窗口中心）
+    #[serde(default)]
+    click_x: Option<f64>,
+    /// 相对窗口左上角的点击 Y
+    #[serde(default)]
+    click_y: Option<f64>,
+    /// 相对某段可见文本定位点击（先 find_text）
+    #[serde(default)]
+    anchor_text: Option<String>,
+    /// 相对 anchor 中心的 X 偏移（屏幕坐标单位），默认 0
+    #[serde(default)]
+    anchor_dx: Option<i32>,
+    /// 相对 anchor 中心的 Y 偏移，默认 0
+    #[serde(default)]
+    anchor_dy: Option<i32>,
+    /// 输入后提交：省略=不提交；`enter`=回车；其它字符串=再 click_text 该文案（如 `发送`）
+    #[serde(default)]
+    submit: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -608,7 +635,7 @@ impl A2DeskServer {
     /// 扁平列出顶层窗口
     #[tool(
         name = "list_windows",
-        description = "列出顶层窗口（扁平）：id/pid/标题/应用名/位置/所在屏幕/可见区域/焦点与最小化状态。可按 filter、pid、screen_index 过滤，按 z/title/pid 排序。",
+        description = "列出顶层窗口（扁平）：id/pid/标题/应用名/位置/所在屏幕/可见区域/焦点与最小化状态。可按 filter、pid、screen_index、only_visible、min_area（默认100，过滤小辅助窗）过滤，按 z/title/pid 排序。",
         annotations(title = "列出窗口", read_only_hint = true, open_world_hint = false)
     )]
     async fn list_windows(&self, Parameters(p): Parameters<ListWindowsParams>) -> ToolResult {
@@ -619,7 +646,7 @@ impl A2DeskServer {
 
     #[tool(
         name = "focus_window",
-        description = "把指定窗口激活到前台。可用 id/title/pid/app_name/focused 选择窗口。",
+        description = "把指定窗口激活到前台（最小化会先 restore）。可用 id/title/pid/app_name/query/focused 选择；多匹配时优先 focused 与更大窗口。返回含 was_minimized。",
         annotations(title = "激活窗口", read_only_hint = false, open_world_hint = false)
     )]
     async fn focus_window(&self, Parameters(p): Parameters<WindowSelectParams>) -> ToolResult {
@@ -779,7 +806,7 @@ impl A2DeskServer {
 
     #[tool(
         name = "type_in_window",
-        description = "聚焦窗口 → 点击窗口中心（全局坐标换算为屏幕局部后点击）→ keyboard_type 输入文本。",
+        description = "激活窗口并输入文本。默认 paste 绕过 IME。可指定 click_x/y（相对窗口）或 anchor_text(+dx/dy) 定位输入框；submit=`enter` 或要点击的按钮文案（如`发送`）。",
         annotations(title = "在窗口中输入", read_only_hint = false, open_world_hint = false)
     )]
     async fn type_in_window(&self, Parameters(p): Parameters<TypeInWindowParams>) -> ToolResult {
@@ -825,7 +852,7 @@ impl A2DeskServer {
 #[tool_handler(
     router = self.tool_router,
     name = "a2desk",
-    instructions = "a2desk 桌面控制：截屏、鼠标、键盘、启动应用、窗口编排、无障碍文本查找、剪贴板。中文 IME 下拉丁文输入请用 paste_text。窗口匹配可用 query（如 YouYou|优优）。推荐：launch_app(wait_window,screen) 或 list_windows -> focus_window/set_window_screen -> paste_text/find_text。"
+    instructions = "a2desk 桌面控制：截屏、鼠标、键盘、启动应用、窗口编排、无障碍文本查找、剪贴板。中文 IME 下拉丁文请用 paste_text 或 type_in_window(input_mode=paste)。窗口匹配可用 query（如 YouYou|优优）。推荐：launch_app(wait_window,screen) 或 list_windows -> focus_window/set_window_screen -> type_in_window(anchor_text/submit) / paste_text。"
 )]
 impl rmcp::ServerHandler for A2DeskServer {}
 
@@ -1237,6 +1264,7 @@ impl A2DeskServer {
             pid: p.pid,
             screen_index: p.screen_index,
             only_visible: p.only_visible.unwrap_or(false),
+            min_area: p.min_area.unwrap_or(100),
             sort_by: WindowSort::parse(p.sort_by.as_deref().unwrap_or("z"))?,
             limit: p.limit.unwrap_or(200),
         };
@@ -1247,15 +1275,21 @@ impl A2DeskServer {
             .collect();
         ok_result(json!({
             "count": items.len(),
+            "min_area": q.min_area,
             "windows": items,
         }))
     }
 
     async fn focus_window_impl(&self, p: WindowSelectParams) -> DeskResult<CallToolResult> {
-        let win = tokio::task::spawn_blocking(move || windows::focus_window(&p.into_selector()))
-            .await
-            .map_err(|e| DeskError::WindowOp(format!("任务失败：{e}")))??;
-        ok_result(json!({ "action": "focus_window", "window": win }))
+        let (win, was_minimized) =
+            tokio::task::spawn_blocking(move || windows::focus_window(&p.into_selector()))
+                .await
+                .map_err(|e| DeskError::WindowOp(format!("任务失败：{e}")))??;
+        ok_result(json!({
+            "action": "focus_window",
+            "was_minimized": was_minimized,
+            "window": win,
+        }))
     }
 
     async fn move_window_impl(&self, p: WindowMoveParams) -> DeskResult<CallToolResult> {
@@ -1454,49 +1488,134 @@ impl A2DeskServer {
                 "text 不能包含空字符 \\0".into(),
             ));
         }
+        let mode = p
+            .input_mode
+            .as_deref()
+            .unwrap_or("paste")
+            .trim()
+            .to_ascii_lowercase();
+        if mode != "paste" && mode != "type" {
+            return Err(DeskError::InvalidArgument(
+                "input_mode 只能是 paste 或 type".into(),
+            ));
+        }
+        let do_click = p.click.unwrap_or(true);
         let interval = p.interval_ms.unwrap_or(0).min(5_000);
         let text = p.text.clone();
         let chars = text.chars().count();
-        let sel = p.sel.into_selector();
+        let sel = p.sel.clone().into_selector();
+        let win_sel_for_text = optional_window_sel(p.sel.clone());
 
-        // 1) 聚焦窗口
-        let win = tokio::task::spawn_blocking(move || windows::focus_window(&sel))
-            .await
-            .map_err(|e| DeskError::WindowOp(format!("任务失败：{e}")))??;
+        // 1) 聚焦（含最小化 restore）
+        let (win, was_minimized) =
+            tokio::task::spawn_blocking(move || windows::focus_window(&sel))
+                .await
+                .map_err(|e| DeskError::WindowOp(format!("任务失败：{e}")))??;
 
-        // 2) 点击窗口中心：先把全局坐标换算为屏幕局部，再 resolve_target
-        //    （必须在 await 前丢弃 Screen，因其含非 Send 的 Monitor）
-        let center_gx = win.x + win.width as i32 / 2;
-        let center_gy = win.y + win.height as i32 / 2;
-        let click_pos = {
-            let screens_list = screens::all_screens()?;
-            if let Some(s) = screens_list.iter().find(|s| {
-                let w = s.info.width as i32;
-                let h = s.info.height as i32;
-                center_gx >= s.info.x
-                    && center_gx < s.info.x + w
-                    && center_gy >= s.info.y
-                    && center_gy < s.info.y + h
-            }) {
-                let lx = (center_gx - s.info.x) as f64;
-                let ly = (center_gy - s.info.y) as f64;
-                let t = resolve_target(Some(&s.index.to_string()), lx, ly)?;
-                (t.global_x, t.global_y)
+        // 2) 决定点击位置
+        let mut click_desc = Value::Null;
+        if do_click {
+            let click_global = if let Some(anchor) = p
+                .anchor_text
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                let anchor = anchor.to_string();
+                let dx = p.anchor_dx.unwrap_or(0);
+                let dy = p.anchor_dy.unwrap_or(0);
+                let win_sel = win_sel_for_text.clone();
+                let matched = tokio::task::spawn_blocking(move || {
+                    let list = text::find_text(&anchor, win_sel.as_ref(), 1)?;
+                    list.into_iter().next().ok_or_else(|| {
+                        DeskError::TextFind(format!("未找到 anchor_text `{anchor}`"))
+                    })
+                })
+                .await
+                .map_err(|e| DeskError::TextFind(format!("任务失败：{e}")))??;
+                click_desc = json!({
+                    "mode": "anchor_text",
+                    "anchor": matched,
+                    "dx": dx,
+                    "dy": dy,
+                });
+                (matched.center_x + dx, matched.center_y + dy)
+            } else if let (Some(cx), Some(cy)) = (p.click_x, p.click_y) {
+                // 相对窗口左上角 → 全局 → 屏幕局部 resolve
+                let gx = win.x as f64 + cx;
+                let gy = win.y as f64 + cy;
+                click_desc = json!({ "mode": "click_xy", "window_x": cx, "window_y": cy });
+                global_to_click_pos(gx, gy)?
             } else {
-                (center_gx, center_gy)
-            }
-        };
-        self.input
-            .click_at(MouseButton::Left, 1, Some(click_pos))
-            .await?;
-        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+                // 默认窗口中心
+                let gx = (win.x + win.width as i32 / 2) as f64;
+                let gy = (win.y + win.height as i32 / 2) as f64;
+                click_desc = json!({ "mode": "center" });
+                global_to_click_pos(gx, gy)?
+            };
 
-        // 3) 输入文本
-        self.input.text(text, interval).await?;
+            self.input
+                .click_at(MouseButton::Left, 1, Some(click_global))
+                .await?;
+            tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        }
+
+        // 3) 输入
+        if mode == "paste" {
+            self.input.paste(text, true).await?;
+        } else {
+            self.input.text(text, interval).await?;
+        }
+
+        // 4) 提交
+        let mut submit_info = Value::Null;
+        if let Some(sub) = p.submit.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            let sub_l = sub.to_ascii_lowercase();
+            if sub_l == "enter" || sub_l == "return" || sub == "回车" {
+                self.input
+                    .chord(vec![enigo::Key::Return], 1, 0)
+                    .await?;
+                submit_info = json!({ "mode": "enter" });
+            } else {
+                let btn_text = sub
+                    .strip_prefix("click:")
+                    .or_else(|| sub.strip_prefix("click_text:"))
+                    .unwrap_or(sub)
+                    .to_string();
+                let win_sel = win_sel_for_text.clone();
+                let matched = tokio::task::spawn_blocking(move || {
+                    let list = text::find_text(&btn_text, win_sel.as_ref(), 1)?;
+                    list.into_iter().next().ok_or_else(|| {
+                        DeskError::TextFind(format!("submit 未找到按钮文本 `{btn_text}`"))
+                    })
+                })
+                .await
+                .map_err(|e| DeskError::TextFind(format!("任务失败：{e}")))??;
+                let screen_index = matched.screen_index.ok_or_else(|| {
+                    DeskError::TextFind("submit 命中缺少 screen_index".into())
+                })?;
+                let lx = matched.local_x.ok_or_else(|| {
+                    DeskError::TextFind("submit 命中缺少 local_x".into())
+                })?;
+                let ly = matched.local_y.ok_or_else(|| {
+                    DeskError::TextFind("submit 命中缺少 local_y".into())
+                })?;
+                let t = resolve_target(Some(&screen_index.to_string()), lx as f64, ly as f64)?;
+                self.input
+                    .click_at(MouseButton::Left, 1, Some((t.global_x, t.global_y)))
+                    .await?;
+                submit_info = json!({ "mode": "click_text", "match": matched });
+            }
+        }
+
         ok_result(json!({
             "action": "type_in_window",
             "chars": chars,
+            "input_mode": mode,
             "interval_ms": interval,
+            "was_minimized": was_minimized,
+            "click": click_desc,
+            "submit": submit_info,
             "window": win,
         }))
     }
@@ -1541,6 +1660,25 @@ fn optional_window_sel(p: WindowSelectParams) -> Option<WindowSelector> {
         None
     } else {
         Some(sel)
+    }
+}
+
+/// 虚拟桌面绝对坐标 → 经所在屏幕裁剪后的可点击全局坐标
+fn global_to_click_pos(global_x: f64, global_y: f64) -> DeskResult<(i32, i32)> {
+    let screens_list = screens::all_screens()?;
+    let gx = to_i32(global_x, "x")?;
+    let gy = to_i32(global_y, "y")?;
+    if let Some(s) = screens_list.iter().find(|s| {
+        let w = s.info.width as i32;
+        let h = s.info.height as i32;
+        gx >= s.info.x && gx < s.info.x + w && gy >= s.info.y && gy < s.info.y + h
+    }) {
+        let lx = (gx - s.info.x) as f64;
+        let ly = (gy - s.info.y) as f64;
+        let t = resolve_target(Some(&s.index.to_string()), lx, ly)?;
+        Ok((t.global_x, t.global_y))
+    } else {
+        Ok((gx, gy))
     }
 }
 

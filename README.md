@@ -41,10 +41,10 @@
 | `find_text` | 无障碍树查找文本（返回屏幕坐标） | `query`、可选窗口选择器、`limit` |
 | `click_text` | 查找文本并点击其中心 | `query`、可选窗口选择器、`button`、`count` |
 | `wait_for_text` | 等待文本出现 | `query`、`timeout_ms`、`poll_ms` |
-| `type_in_window` | 聚焦窗口 → 点中心 → 输入文本 | 选择器 + `text`、`interval_ms` |
+| `type_in_window` | 聚焦窗口 → 可选点击定位 → 粘贴/键入 → 可选提交 | 选择器 + `text`、`input_mode`(paste/type)、`click`、`click_x/y`、`anchor_text`(+dx/dy)、`submit`、`interval_ms` |
 | `clipboard_get` / `clipboard_set` | 读写剪贴板文本 | `text`（set） |
 
-窗口类工具的**选择器**字段（可组合）：`id`、`title`（子串）、`pid`、`app_name`（子串）、`focused`。
+窗口类工具的**选择器**字段（可组合）：`id`、`title`（子串）、`pid`、`app_name`（子串）、`query`、`focused`。
 
 `find_text` / `click_text`：Windows 走 UI Automation；macOS 走辅助功能（需授权）；Linux(X11) 窗口控制已支持，文本查找为扩展点（可先用截屏+点击）。
 
@@ -57,8 +57,8 @@
 
 | 工具 | 说明 |
 | --- | --- |
-| `list_windows` | 扁平列出顶层窗口（含 `visible_bounds`、`process_name`、所在屏幕） |
-| `focus_window` | 激活到前台 |
+| `list_windows` | 扁平列出顶层窗口；`min_area` 默认 100 过滤小辅助窗；`only_visible` 可只看可见窗 |
+| `focus_window` | 激活到前台（最小化先 restore）；返回 `was_minimized` |
 | `move_window` | 移动到虚拟桌面绝对坐标 `(x,y)` |
 | `resize_window` | 调整宽高 |
 | `set_window_bounds` | 同时设置位置与尺寸 |
@@ -66,7 +66,7 @@
 | `minimize_window` / `maximize_window` / `restore_window` / `close_window` | 显隐与关闭 |
 | `screenshot_window` | 按窗口截图 |
 | `wait_for_window` | 等待匹配窗口出现 |
-| `type_in_window` | 聚焦 → 点窗口中心 → 输入文本 |
+| `type_in_window` | 聚焦 → 定位输入区（中心 / 相对坐标 / `anchor_text`）→ `paste`（默认）或 `type` → 可选 `submit`（`enter` 或按钮文案） |
 
 ### 文本查找 / 剪贴板
 

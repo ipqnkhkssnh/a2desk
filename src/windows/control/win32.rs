@@ -29,16 +29,17 @@ pub fn focus(id: u32, _pid: u32) -> DeskResult<()> {
     ensure_window(hwnd)?;
 
     unsafe {
-        // 尝试放开前台限制
         let _ = AllowSetForegroundWindow(ASFW_ANY);
 
-        if IsIconic(hwnd) != 0 {
+        // 最小化时必须 restore，并稍等再抢焦点
+        let iconic = IsIconic(hwnd) != 0;
+        if iconic {
             ShowWindow(hwnd, SW_RESTORE);
+            std::thread::sleep(std::time::Duration::from_millis(120));
         } else {
             ShowWindow(hwnd, SW_SHOW);
         }
 
-        // 附着到前台线程，提高 SetForegroundWindow 成功率
         let fg = GetForegroundWindow();
         let mut fg_tid = 0u32;
         let mut target_tid = 0u32;
@@ -67,7 +68,6 @@ pub fn focus(id: u32, _pid: u32) -> DeskResult<()> {
             AttachThreadInput(cur, target_tid, 0);
         }
 
-        // 再抬一层，避免被其它置顶窗挡住
         SetWindowPos(
             hwnd,
             HWND_TOP,
@@ -78,8 +78,13 @@ pub fn focus(id: u32, _pid: u32) -> DeskResult<()> {
             SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
         );
 
+        // 二次确认：若仍最小化再 restore 一次
+        if IsIconic(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+            let _ = SetForegroundWindow(hwnd);
+        }
+
         if ok == 0 {
-            // 即便返回 0，窗口可能已到前台；不直接判失败
             tracing::warn!("SetForegroundWindow 返回 false，已尽量置顶");
         }
     }
@@ -165,7 +170,6 @@ pub fn get_rect(id: u32) -> DeskResult<(i32, i32, u32, u32)> {
     ))
 }
 
-#[allow(dead_code)]
 pub fn is_minimized(id: u32) -> bool {
     let hwnd = hwnd_from_id(id);
     unsafe { IsWindow(hwnd) != 0 && IsIconic(hwnd) != 0 }

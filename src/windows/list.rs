@@ -90,6 +90,8 @@ pub struct WindowQuery {
     pub pid: Option<u32>,
     pub screen_index: Option<usize>,
     pub only_visible: bool,
+    /// 过滤宽×高小于该值的窗口（0=不过滤）
+    pub min_area: u32,
     pub sort_by: WindowSort,
     pub limit: usize,
 }
@@ -101,6 +103,7 @@ impl Default for WindowQuery {
             pid: None,
             screen_index: None,
             only_visible: false,
+            min_area: 100,
             sort_by: WindowSort::Z,
             limit: 200,
         }
@@ -147,6 +150,12 @@ pub fn list_windows(q: &WindowQuery) -> DeskResult<Vec<WindowInfo>> {
                     .unwrap_or(true)
         });
     }
+    if q.min_area > 0 {
+        list.retain(|w| {
+            let area = (w.width as u64).saturating_mul(w.height as u64);
+            area >= q.min_area as u64
+        });
+    }
     if let Some(filter) = q.filter.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
         let needles = split_needles(filter);
         if !needles.is_empty() {
@@ -190,7 +199,14 @@ pub fn resolve_window(sel: &WindowSelector) -> DeskResult<WindowInfo> {
             format_candidates(&candidates)
         )));
     }
-    matched.sort_by_key(|w| (std::cmp::Reverse(w.is_focused), std::cmp::Reverse(w.z)));
+    matched.sort_by_key(|w| {
+        (
+            std::cmp::Reverse(w.is_focused),
+            // 优先更大的主窗口，避免命中 16×16 辅助窗
+            std::cmp::Reverse((w.width as u64).saturating_mul(w.height as u64)),
+            std::cmp::Reverse(w.z),
+        )
+    });
     Ok(matched.remove(0))
 }
 

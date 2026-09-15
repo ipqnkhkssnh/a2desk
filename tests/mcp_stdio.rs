@@ -214,6 +214,46 @@ fn mcp_stdio_roundtrip() {
         );
     }
 
+    // P1：type_in_window / list_windows 关键参数应出现在 schema
+    let type_schema = tools
+        .pointer("/result/tools")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|t| t.get("name").and_then(Value::as_str) == Some("type_in_window"))
+        .expect("应有 type_in_window");
+    let type_props = type_schema
+        .pointer("/inputSchema/properties")
+        .expect("type_in_window 应有 properties");
+    for key in [
+        "input_mode",
+        "click",
+        "click_x",
+        "click_y",
+        "anchor_text",
+        "anchor_dx",
+        "anchor_dy",
+        "submit",
+    ] {
+        assert!(
+            type_props.get(key).is_some(),
+            "type_in_window 缺少参数 {key}: {type_props}"
+        );
+    }
+    let list_schema = tools
+        .pointer("/result/tools")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|t| t.get("name").and_then(Value::as_str) == Some("list_windows"))
+        .expect("应有 list_windows");
+    assert!(
+        list_schema
+            .pointer("/inputSchema/properties/min_area")
+            .is_some(),
+        "list_windows 应有 min_area: {list_schema}"
+    );
+
     // 3. list_screens
     let result = call(&mut client, 3, "list_screens", json!({}));
     assert_not_error(&result);
@@ -327,7 +367,7 @@ fn mcp_stdio_roundtrip() {
         &mut client,
         10,
         "list_windows",
-        json!({ "limit": 20, "only_visible": true }),
+        json!({ "limit": 20, "only_visible": true, "min_area": 100 }),
     );
     assert_not_error(&result);
     let wins = structured(&result);
@@ -336,6 +376,11 @@ fn mcp_stdio_roundtrip() {
         "应返回 windows 数组: {wins}"
     );
     assert!(wins["count"].as_u64().is_some());
+    assert_eq!(
+        wins["min_area"].as_u64(),
+        Some(100),
+        "应回显 min_area: {wins}"
+    );
 
     // 11. clipboard_get：只读；空剪贴板在部分平台会报错，只要进程不崩即可
     let result = call(&mut client, 11, "clipboard_get", json!({}));

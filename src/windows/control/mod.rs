@@ -20,15 +20,22 @@ cfg_if::cfg_if! {
     }
 }
 
-pub fn focus_window(sel: &WindowSelector) -> DeskResult<WindowInfo> {
+pub fn focus_window(sel: &WindowSelector) -> DeskResult<(WindowInfo, bool)> {
     let win = resolve_window(sel)?;
+    let was_minimized = win.is_minimized || platform::is_minimized(win.id);
+    if was_minimized {
+        let _ = platform::restore(win.id);
+        std::thread::sleep(std::time::Duration::from_millis(120));
+    }
     platform::focus(win.id, win.pid)?;
-    // 重新读取状态
-    resolve_window(&WindowSelector {
+    // 再短等，让前台切换生效
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let refreshed = resolve_window(&WindowSelector {
         id: Some(win.id),
         ..Default::default()
     })
-    .or(Ok(win))
+    .unwrap_or(win);
+    Ok((refreshed, was_minimized))
 }
 
 pub fn move_window(sel: &WindowSelector, x: i32, y: i32) -> DeskResult<WindowInfo> {

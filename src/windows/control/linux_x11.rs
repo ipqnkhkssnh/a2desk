@@ -175,3 +175,7 @@ pub fn close(id: u32) -> DeskResult<()> {
         .map_err(|e| DeskError::WindowOp(e.to_string()))?;
     Ok(())
 }
+
+pub fn is_minimized(_id: u32) -> bool {
+    false
+}
