@@ -10,6 +10,8 @@
 
 ## 一、工具一览
 
+### 屏幕 / 输入 / 应用
+
 | 工具 | 说明 | 关键参数 |
 | --- | --- | --- |
 | `list_screens` | 获取所有屏幕的分辨率/位置/缩放/主屏标记 | — |
@@ -25,6 +27,50 @@
 | `keyboard_key_down` | 按下不松开（长按/组合键） | `keys` |
 | `keyboard_key_up` | 松开按键，`["all"]` 松开全部 | `keys` |
 | `list_apps` | 正在运行的程序（pid/名称/路径/命令行/CPU/内存/窗口） | `filter`、`pids`、`include_windows`、`only_with_windows`、`sort_by`、`limit` |
+| `list_windows` | 扁平窗口列表（含可见区域、所在屏幕） | `filter`、`pid`、`screen_index`、`only_visible`、`sort_by`、`limit` |
+| `focus_window` | 激活/前置窗口 | `id` / `title` / `pid` / `app_name` / `focused` |
+| `move_window` | 移动窗口（**虚拟桌面绝对坐标**） | 选择器 + `x`、`y` |
+| `resize_window` | 调整窗口大小 | 选择器 + `width`、`height` |
+| `set_window_bounds` | 同时设置位置与尺寸 | 选择器 + `x`、`y`、`width`、`height` |
+| `set_window_screen` | 把窗口放到指定屏幕 | 选择器 + `screen`、`margin` |
+| `minimize_window` / `maximize_window` / `restore_window` / `close_window` | 窗口显隐与关闭 | 选择器 |
+| `screenshot_window` | 按窗口截图 | 选择器 + `scale`/`max_width`/`format`/`quality` |
+| `wait_for_window` | 等待匹配窗口出现 | 选择器 + `timeout_ms`、`poll_ms` |
+| `find_text` | 无障碍树查找文本（返回屏幕坐标） | `query`、可选窗口选择器、`limit` |
+| `click_text` | 查找文本并点击其中心 | `query`、可选窗口选择器、`button`、`count` |
+| `wait_for_text` | 等待文本出现 | `query`、`timeout_ms`、`poll_ms` |
+| `type_in_window` | 聚焦窗口 → 点中心 → 输入文本 | 选择器 + `text`、`interval_ms` |
+| `clipboard_get` / `clipboard_set` | 读写剪贴板文本 | `text`（set） |
+
+窗口类工具的**选择器**字段（可组合）：`id`、`title`（子串）、`pid`、`app_name`（子串）、`focused`。
+
+`find_text` / `click_text`：Windows 走 UI Automation；macOS 走辅助功能（需授权）；Linux(X11) 窗口控制已支持，文本查找为扩展点（可先用截屏+点击）。
+
+### 窗口编排
+
+窗口选择器字段（多数窗口工具通用，可组合）：`id` / `title` / `pid` / `app_name` / `focused`。
+
+| 工具 | 说明 |
+| --- | --- |
+| `list_windows` | 扁平列出顶层窗口（含 `visible_bounds`、所在屏幕） |
+| `focus_window` | 激活到前台 |
+| `move_window` | 移动到虚拟桌面绝对坐标 `(x,y)` |
+| `resize_window` | 调整宽高 |
+| `set_window_bounds` | 同时设置位置与尺寸 |
+| `set_window_screen` | 把窗口放到指定屏幕（`screen` + 可选 `margin`） |
+| `minimize_window` / `maximize_window` / `restore_window` / `close_window` | 显隐与关闭 |
+| `screenshot_window` | 按窗口截图 |
+| `wait_for_window` | 等待匹配窗口出现 |
+| `type_in_window` | 聚焦 → 点窗口中心 → 输入文本 |
+
+### 文本查找 / 剪贴板
+
+| 工具 | 说明 |
+| --- | --- |
+| `find_text` | 无障碍树查找文本，返回屏幕坐标（Windows=UIA，macOS=AX/System Events，Linux=AT-SPI 扩展中） |
+| `click_text` | 查找并点击文本中心 |
+| `wait_for_text` | 等待文本出现 |
+| `clipboard_get` / `clipboard_set` | 读写系统剪贴板文本 |
 
 所有截图/鼠标工具都支持 `screen` 参数，取值可以是：
 

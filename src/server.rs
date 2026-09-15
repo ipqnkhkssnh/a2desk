@@ -1,4 +1,4 @@
-//! MCP 服务器：把屏幕/鼠标/键盘/应用能力暴露成 MCP 工具
+//! MCP 服务器：把屏幕/鼠标/键盘/应用/窗口/文本/剪贴板能力暴露成 MCP 工具
 
 use base64::Engine as _;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -10,10 +10,13 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
 
 use crate::apps::{self, AppQuery, AppSort};
+use crate::clipboard;
 use crate::error::{DeskError, DeskResult, ToolResult};
 use crate::input::{parse_key_group, InputHandle, MouseButton, ScrollDir, MAX_SCROLL_AMOUNT};
 use crate::screens::{self, CaptureOptions, OutFormat};
+use crate::text;
 use crate::types::Region;
+use crate::windows::{self, WindowQuery, WindowSelector, WindowSort};
 use crate::Config;
 
 /// a2desk MCP 服务器
@@ -208,6 +211,177 @@ struct ListAppsParams {
     limit: Option<usize>,
 }
 
+/// 窗口选择参数（多数窗口类工具共用）
+#[derive(Debug, Clone, Deserialize, JsonSchema, Default)]
+struct WindowSelectParams {
+    /// 窗口 id（list_windows / list_apps 返回）
+    #[serde(default)]
+    id: Option<u32>,
+    /// 标题子串（大小写不敏感）
+    #[serde(default)]
+    title: Option<String>,
+    /// 进程 pid
+    #[serde(default)]
+    pid: Option<u32>,
+    /// 应用名子串
+    #[serde(default)]
+    app_name: Option<String>,
+    /// 只要当前焦点窗口
+    #[serde(default)]
+    focused: Option<bool>,
+}
+
+impl WindowSelectParams {
+    /// 拼装窗口选择器（复用 windows::selector_from_params）
+    fn into_selector(self) -> WindowSelector {
+        windows::selector_from_params(self.id, self.title, self.pid, self.app_name, self.focused)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ListWindowsParams {
+    /// 过滤：标题 / 应用名 / id / pid；可用 `|` 分隔
+    #[serde(default)]
+    filter: Option<String>,
+    #[serde(default)]
+    pid: Option<u32>,
+    /// 只返回指定屏幕上的窗口
+    #[serde(default)]
+    screen_index: Option<usize>,
+    /// 只返回可见窗口（未最小化且面积>1）
+    #[serde(default)]
+    only_visible: Option<bool>,
+    /// 排序：z（默认，越前越大）/ title / pid
+    #[serde(default)]
+    sort_by: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct WindowMoveParams {
+    #[serde(flatten)]
+    sel: WindowSelectParams,
+    /// 目标左上角 X（**虚拟桌面绝对坐标**，与 list_windows 的 x 同系；不是屏幕内局部坐标）
+    x: i32,
+    /// 目标左上角 Y（**虚拟桌面绝对坐标**，与 list_windows 的 y 同系）
+    y: i32,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct WindowResizeParams {
+    #[serde(flatten)]
+    sel: WindowSelectParams,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct WindowBoundsParams {
+    #[serde(flatten)]
+    sel: WindowSelectParams,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct SetWindowScreenParams {
+    #[serde(flatten)]
+    sel: WindowSelectParams,
+    /// 目标屏幕：索引/名称/primary；省略=主屏
+    #[serde(default, deserialize_with = "de_screen")]
+    screen: Option<String>,
+    /// 相对屏幕左上角的边距，默认 40
+    #[serde(default)]
+    margin: Option<i32>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ScreenshotWindowParams {
+    #[serde(flatten)]
+    sel: WindowSelectParams,
+    #[serde(default)]
+    scale: Option<f64>,
+    #[serde(default)]
+    max_width: Option<u32>,
+    #[serde(default)]
+    format: Option<String>,
+    #[serde(default)]
+    quality: Option<u8>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct WaitWindowParams {
+    #[serde(flatten)]
+    sel: WindowSelectParams,
+    /// 超时毫秒，默认 10000
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+    /// 轮询间隔毫秒，默认 200
+    #[serde(default)]
+    poll_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct FindTextParams {
+    /// 要查找的文本（子串，大小写不敏感）
+    query: String,
+    /// 可选：限定在某窗口内查找（选择器字段）
+    #[serde(flatten)]
+    window: WindowSelectParams,
+    /// 最多返回条数，默认 50
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ClickTextParams {
+    /// 要点击的文本（子串匹配）
+    query: String,
+    /// 可选：限定在某窗口内查找
+    #[serde(flatten)]
+    window: WindowSelectParams,
+    /// 按键：left（默认）/ middle / right
+    #[serde(default)]
+    button: Option<String>,
+    /// 点击次数 1-3，默认 1
+    #[serde(default)]
+    count: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct WaitTextParams {
+    /// 要等待出现的文本
+    query: String,
+    /// 可选：限定在某窗口内查找
+    #[serde(flatten)]
+    window: WindowSelectParams,
+    /// 超时毫秒，默认 10000
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+    /// 轮询间隔毫秒，默认 200
+    #[serde(default)]
+    poll_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct TypeInWindowParams {
+    #[serde(flatten)]
+    sel: WindowSelectParams,
+    /// 要输入的文本
+    text: String,
+    /// 每个字符间隔毫秒，0（默认）= 快速输入
+    #[serde(default)]
+    interval_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ClipboardSetParams {
+    text: String,
+}
+
 // ---------------------------------------------------------------------------
 // 工具实现
 // ---------------------------------------------------------------------------
@@ -373,12 +547,217 @@ impl A2DeskServer {
     async fn list_apps(&self, Parameters(p): Parameters<ListAppsParams>) -> ToolResult {
         self.list_apps_impl(p).await.map_err(DeskError::into_tool_error)
     }
+
+    /// 扁平列出顶层窗口
+    #[tool(
+        name = "list_windows",
+        description = "列出顶层窗口（扁平）：id/pid/标题/应用名/位置/所在屏幕/可见区域/焦点与最小化状态。可按 filter、pid、screen_index 过滤，按 z/title/pid 排序。",
+        annotations(title = "列出窗口", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_windows(&self, Parameters(p): Parameters<ListWindowsParams>) -> ToolResult {
+        self.list_windows_impl(p)
+            .await
+            .map_err(DeskError::into_tool_error)
+    }
+
+    #[tool(
+        name = "focus_window",
+        description = "把指定窗口激活到前台。可用 id/title/pid/app_name/focused 选择窗口。",
+        annotations(title = "激活窗口", read_only_hint = false, open_world_hint = false)
+    )]
+    async fn focus_window(&self, Parameters(p): Parameters<WindowSelectParams>) -> ToolResult {
+        self.focus_window_impl(p)
+            .await
+            .map_err(DeskError::into_tool_error)
+    }
+
+    #[tool(
+        name = "move_window",
+        description = "移动窗口到 (x,y)，保持原尺寸。x/y 为虚拟桌面绝对坐标（与 list_windows 返回的 x/y 同系），不是屏幕内局部坐标；跨屏时可直接用目标屏的全局位置。",
+        annotations(title = "移动窗口", read_only_hint = false, open_world_hint = false)
+    )]
+    async fn move_window(&self, Parameters(p): Parameters<WindowMoveParams>) -> ToolResult {
+        self.move_window_impl(p)
+            .await
+            .map_err(DeskError::into_tool_error)
+    }
+
+    #[tool(
+        name = "resize_window",
+        description = "调整窗口宽高，保持左上角位置不变。",
+        annotations(title = "调整窗口大小", read_only_hint = false, open_world_hint = false)
+    )]
+    async fn resize_window(&self, Parameters(p): Parameters<WindowResizeParams>) -> ToolResult {
+        self.resize_window_impl(p)
+            .await
+            .map_err(DeskError::into_tool_error)
+    }
+
+    #[tool(
+        name = "set_window_bounds",
+        description = "同时设置窗口位置与尺寸。x/y 为虚拟桌面绝对坐标（同 list_windows），width/height 为像素/逻辑点。",
+        annotations(title = "设置窗口矩形", read_only_hint = false, open_world_hint = false)
+    )]
+    async fn set_window_bounds(&self, Parameters(p): Parameters<WindowBoundsParams>) -> ToolResult {
+        self.set_window_bounds_impl(p)
+            .await
+            .map_err(DeskError::into_tool_error)
+    }
+
+    #[tool(
+        name = "set_window_screen",
+        description = "把窗口放到指定屏幕（默认落在该屏左上角附近，过大则缩放适配）。screen 同其它工具。",
+        annotations(title = "窗口移到指定屏幕", read_only_hint = false, open_world_hint = false)
+    )]
+    async fn set_window_screen(
+        &self,
+        Parameters(p): Parameters<SetWindowScreenParams>,
+    ) -> ToolResult {
+        self.set_window_screen_impl(p)
+            .await
+            .map_err(DeskError::into_tool_error)
+    }
+
+    #[tool(
+        name = "minimize_window",
+        description = "最小化指定窗口。",
+        annotations(title = "最小化窗口", read_only_hint = false, open_world_hint = false)
+    )]
+    async fn minimize_window(&self, Parameters(p): Parameters<WindowSelectParams>) -> ToolResult {
+        self.minimize_window_impl(p)
+            .await
+            .map_err(DeskError::into_tool_error)
+    }
+
+    #[tool(
+        name = "maximize_window",
+        description = "最大化指定窗口。",
+        annotations(title = "最大化窗口", read_only_hint = false, open_world_hint = false)
+    )]
+    async fn maximize_window(&self, Parameters(p): Parameters<WindowSelectParams>) -> ToolResult {
+        self.maximize_window_impl(p)
+            .await
+            .map_err(DeskError::into_tool_error)
+    }
+
+    #[tool(
+        name = "restore_window",
+        description = "还原窗口（取消最小化/最大化）。",
+        annotations(title = "还原窗口", read_only_hint = false, open_world_hint = false)
+    )]
+    async fn restore_window(&self, Parameters(p): Parameters<WindowSelectParams>) -> ToolResult {
+        self.restore_window_impl(p)
+            .await
+            .map_err(DeskError::into_tool_error)
+    }
+
+    #[tool(
+        name = "close_window",
+        description = "关闭指定窗口（发送关闭请求，等同点关闭按钮）。",
+        annotations(title = "关闭窗口", read_only_hint = false, open_world_hint = false)
+    )]
+    async fn close_window(&self, Parameters(p): Parameters<WindowSelectParams>) -> ToolResult {
+        self.close_window_impl(p)
+            .await
+            .map_err(DeskError::into_tool_error)
+    }
+
+    #[tool(
+        name = "screenshot_window",
+        description = "按窗口截图（自动裁到窗口矩形），返回 base64 图片。选择器同 focus_window。",
+        annotations(title = "窗口截图", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn screenshot_window(
+        &self,
+        Parameters(p): Parameters<ScreenshotWindowParams>,
+    ) -> ToolResult {
+        self.screenshot_window_impl(p)
+            .await
+            .map_err(DeskError::into_tool_error)
+    }
+
+    #[tool(
+        name = "wait_for_window",
+        description = "轮询等待匹配窗口出现，超时返回错误。",
+        annotations(title = "等待窗口", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn wait_for_window(&self, Parameters(p): Parameters<WaitWindowParams>) -> ToolResult {
+        self.wait_for_window_impl(p)
+            .await
+            .map_err(DeskError::into_tool_error)
+    }
+
+    #[tool(
+        name = "find_text",
+        description = "在桌面或指定窗口的无障碍树中查找包含 query 的文本，返回屏幕坐标（含 local_x/local_y）。Windows=UIA，macOS=AX，Linux=AT-SPI。",
+        annotations(title = "查找文本", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn find_text(&self, Parameters(p): Parameters<FindTextParams>) -> ToolResult {
+        self.find_text_impl(p)
+            .await
+            .map_err(DeskError::into_tool_error)
+    }
+
+    #[tool(
+        name = "click_text",
+        description = "先 find_text 再点击首个匹配的中心（使用 local_x/local_y + screen_index）。可选窗口选择器与 button/count。",
+        annotations(title = "点击文本", read_only_hint = false, open_world_hint = false)
+    )]
+    async fn click_text(&self, Parameters(p): Parameters<ClickTextParams>) -> ToolResult {
+        self.click_text_impl(p)
+            .await
+            .map_err(DeskError::into_tool_error)
+    }
+
+    #[tool(
+        name = "wait_for_text",
+        description = "轮询等待无障碍树中出现包含 query 的文本，超时返回错误。",
+        annotations(title = "等待文本", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn wait_for_text(&self, Parameters(p): Parameters<WaitTextParams>) -> ToolResult {
+        self.wait_for_text_impl(p)
+            .await
+            .map_err(DeskError::into_tool_error)
+    }
+
+    #[tool(
+        name = "type_in_window",
+        description = "聚焦窗口 → 点击窗口中心（全局坐标换算为屏幕局部后点击）→ keyboard_type 输入文本。",
+        annotations(title = "在窗口中输入", read_only_hint = false, open_world_hint = false)
+    )]
+    async fn type_in_window(&self, Parameters(p): Parameters<TypeInWindowParams>) -> ToolResult {
+        self.type_in_window_impl(p)
+            .await
+            .map_err(DeskError::into_tool_error)
+    }
+
+    #[tool(
+        name = "clipboard_get",
+        description = "读取系统剪贴板文本。",
+        annotations(title = "读取剪贴板", read_only_hint = true, open_world_hint = false)
+    )]
+    async fn clipboard_get(&self) -> ToolResult {
+        self.clipboard_get_impl()
+            .await
+            .map_err(DeskError::into_tool_error)
+    }
+
+    #[tool(
+        name = "clipboard_set",
+        description = "写入系统剪贴板文本。",
+        annotations(title = "写入剪贴板", read_only_hint = false, open_world_hint = false)
+    )]
+    async fn clipboard_set(&self, Parameters(p): Parameters<ClipboardSetParams>) -> ToolResult {
+        self.clipboard_set_impl(p)
+            .await
+            .map_err(DeskError::into_tool_error)
+    }
 }
 
 #[tool_handler(
     router = self.tool_router,
     name = "a2desk",
-    instructions = "a2desk 桌面控制：截屏、鼠标、键盘、应用枚举。所有鼠标工具与截屏 region 统一使用「屏幕内局部坐标」（相对该屏幕左上角），用 screen 参数（索引/名称/primary，省略=主屏）指定屏幕。推荐流程：list_screens -> screenshot(scale=1.0 时 1 图片像素=1 坐标单位) -> mouse_click。"
+    instructions = "a2desk 桌面控制：截屏、鼠标、键盘、应用/窗口编排、无障碍文本查找、剪贴板。鼠标与截屏 region 使用屏幕内局部坐标；窗口 move 使用虚拟桌面绝对坐标。推荐：list_screens -> list_windows/focus_window/set_window_screen -> find_text/click_text 或 screenshot -> mouse_click。"
 )]
 impl rmcp::ServerHandler for A2DeskServer {}
 
@@ -765,6 +1144,302 @@ impl A2DeskServer {
             value["warnings"] = json!(list.warnings);
         }
         ok_result(value)
+    }
+
+    async fn list_windows_impl(&self, p: ListWindowsParams) -> DeskResult<CallToolResult> {
+        let q = WindowQuery {
+            filter: p.filter,
+            pid: p.pid,
+            screen_index: p.screen_index,
+            only_visible: p.only_visible.unwrap_or(false),
+            sort_by: WindowSort::parse(p.sort_by.as_deref().unwrap_or("z"))?,
+            limit: p.limit.unwrap_or(200),
+        };
+        let list = windows::list_windows(&q)?;
+        let items: Vec<Value> = list
+            .iter()
+            .map(|w| serde_json::to_value(w).unwrap_or(Value::Null))
+            .collect();
+        ok_result(json!({
+            "count": items.len(),
+            "windows": items,
+        }))
+    }
+
+    async fn focus_window_impl(&self, p: WindowSelectParams) -> DeskResult<CallToolResult> {
+        let win = tokio::task::spawn_blocking(move || windows::focus_window(&p.into_selector()))
+            .await
+            .map_err(|e| DeskError::WindowOp(format!("任务失败：{e}")))??;
+        ok_result(json!({ "action": "focus_window", "window": win }))
+    }
+
+    async fn move_window_impl(&self, p: WindowMoveParams) -> DeskResult<CallToolResult> {
+        let sel = p.sel.into_selector();
+        let win = tokio::task::spawn_blocking(move || windows::move_window(&sel, p.x, p.y))
+            .await
+            .map_err(|e| DeskError::WindowOp(format!("任务失败：{e}")))??;
+        ok_result(json!({ "action": "move_window", "window": win }))
+    }
+
+    async fn resize_window_impl(&self, p: WindowResizeParams) -> DeskResult<CallToolResult> {
+        let sel = p.sel.into_selector();
+        let win =
+            tokio::task::spawn_blocking(move || windows::resize_window(&sel, p.width, p.height))
+                .await
+                .map_err(|e| DeskError::WindowOp(format!("任务失败：{e}")))??;
+        ok_result(json!({ "action": "resize_window", "window": win }))
+    }
+
+    async fn set_window_bounds_impl(&self, p: WindowBoundsParams) -> DeskResult<CallToolResult> {
+        let sel = p.sel.into_selector();
+        let win = tokio::task::spawn_blocking(move || {
+            windows::set_window_bounds(&sel, p.x, p.y, p.width, p.height)
+        })
+        .await
+        .map_err(|e| DeskError::WindowOp(format!("任务失败：{e}")))??;
+        ok_result(json!({ "action": "set_window_bounds", "window": win }))
+    }
+
+    async fn set_window_screen_impl(&self, p: SetWindowScreenParams) -> DeskResult<CallToolResult> {
+        let sel = p.sel.into_selector();
+        let screen = p.screen.clone();
+        let margin = p.margin.unwrap_or(40);
+        let win = tokio::task::spawn_blocking(move || {
+            windows::set_window_screen(&sel, screen.as_deref(), margin)
+        })
+        .await
+        .map_err(|e| DeskError::WindowOp(format!("任务失败：{e}")))??;
+        ok_result(json!({ "action": "set_window_screen", "window": win }))
+    }
+
+    async fn minimize_window_impl(&self, p: WindowSelectParams) -> DeskResult<CallToolResult> {
+        let win =
+            tokio::task::spawn_blocking(move || windows::minimize_window(&p.into_selector()))
+                .await
+                .map_err(|e| DeskError::WindowOp(format!("任务失败：{e}")))??;
+        ok_result(json!({ "action": "minimize_window", "window": win }))
+    }
+
+    async fn maximize_window_impl(&self, p: WindowSelectParams) -> DeskResult<CallToolResult> {
+        let win =
+            tokio::task::spawn_blocking(move || windows::maximize_window(&p.into_selector()))
+                .await
+                .map_err(|e| DeskError::WindowOp(format!("任务失败：{e}")))??;
+        ok_result(json!({ "action": "maximize_window", "window": win }))
+    }
+
+    async fn restore_window_impl(&self, p: WindowSelectParams) -> DeskResult<CallToolResult> {
+        let win = tokio::task::spawn_blocking(move || windows::restore_window(&p.into_selector()))
+            .await
+            .map_err(|e| DeskError::WindowOp(format!("任务失败：{e}")))??;
+        ok_result(json!({ "action": "restore_window", "window": win }))
+    }
+
+    async fn close_window_impl(&self, p: WindowSelectParams) -> DeskResult<CallToolResult> {
+        let win = tokio::task::spawn_blocking(move || windows::close_window(&p.into_selector()))
+            .await
+            .map_err(|e| DeskError::WindowOp(format!("任务失败：{e}")))??;
+        ok_result(json!({ "action": "close_window", "window": win }))
+    }
+
+    async fn screenshot_window_impl(
+        &self,
+        p: ScreenshotWindowParams,
+    ) -> DeskResult<CallToolResult> {
+        let format = OutFormat::parse(p.format.as_deref().unwrap_or("jpeg"))?;
+        let quality = p.quality.unwrap_or(85).clamp(1, 100);
+        let scale = p.scale.unwrap_or(1.0);
+        if !scale.is_finite() || scale <= 0.0 || scale > 8.0 {
+            return Err(DeskError::InvalidArgument(format!(
+                "scale 必须在 (0, 8] 之间，当前为 {scale}"
+            )));
+        }
+        let opts = CaptureOptions {
+            region: None,
+            scale,
+            max_width: p.max_width.filter(|w| *w > 0),
+            format,
+            quality,
+        };
+        let sel = p.sel.into_selector();
+        let (bytes, meta, win) =
+            tokio::task::spawn_blocking(move || windows::screenshot_window(&sel, &opts))
+                .await
+                .map_err(|e| DeskError::Capture(format!("任务失败：{e}")))??;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        let mut value = serde_json::to_value(&meta).unwrap_or(Value::Null);
+        if let Value::Object(map) = &mut value {
+            map.insert("window".into(), serde_json::to_value(&win).unwrap_or(Value::Null));
+            map.insert(
+                "coordinate_hint".into(),
+                json!(
+                    "窗口截图像素坐标可换算为虚拟桌面绝对坐标：global = window.xy + 图片XY / pixel_ratio"
+                ),
+            );
+        }
+        let text = serde_json::to_string_pretty(&value).unwrap_or_default();
+        let mut result = CallToolResult::success(vec![
+            ContentBlock::image(b64, format.mime()),
+            ContentBlock::text(text),
+        ]);
+        result.structured_content = Some(value);
+        Ok(result)
+    }
+
+    async fn wait_for_window_impl(&self, p: WaitWindowParams) -> DeskResult<CallToolResult> {
+        let sel = p.sel.into_selector();
+        let timeout = p.timeout_ms.unwrap_or(10_000);
+        let poll = p.poll_ms.unwrap_or(200);
+        let win = tokio::task::spawn_blocking(move || {
+            windows::wait_for_window(&sel, timeout, poll)
+        })
+        .await
+        .map_err(|e| DeskError::WindowOp(format!("任务失败：{e}")))??;
+        ok_result(json!({ "action": "wait_for_window", "window": win }))
+    }
+
+    async fn find_text_impl(&self, p: FindTextParams) -> DeskResult<CallToolResult> {
+        let sel = optional_window_sel(p.window);
+        let query = p.query;
+        let limit = p.limit.unwrap_or(50);
+        let matches = tokio::task::spawn_blocking(move || {
+            text::find_text(&query, sel.as_ref(), limit)
+        })
+        .await
+        .map_err(|e| DeskError::TextFind(format!("任务失败：{e}")))??;
+        ok_result(json!({
+            "count": matches.len(),
+            "matches": matches,
+        }))
+    }
+
+    async fn click_text_impl(&self, p: ClickTextParams) -> DeskResult<CallToolResult> {
+        let sel = optional_window_sel(p.window);
+        let query = p.query.clone();
+        // 先 find_text，再取首个匹配的局部坐标点击
+        let matched = tokio::task::spawn_blocking(move || {
+            let list = text::find_text(&query, sel.as_ref(), 1)?;
+            list.into_iter().next().ok_or_else(|| {
+                DeskError::TextFind(format!("未找到包含 `{query}` 的文本"))
+            })
+        })
+        .await
+        .map_err(|e| DeskError::TextFind(format!("任务失败：{e}")))??;
+
+        let screen_index = matched.screen_index.ok_or_else(|| {
+            DeskError::TextFind("文本命中缺少 screen_index，无法换算局部坐标".into())
+        })?;
+        let local_x = matched.local_x.ok_or_else(|| {
+            DeskError::TextFind("文本命中缺少 local_x".into())
+        })?;
+        let local_y = matched.local_y.ok_or_else(|| {
+            DeskError::TextFind("文本命中缺少 local_y".into())
+        })?;
+
+        let button = MouseButton::parse(p.button.as_deref().unwrap_or("left"))?;
+        let count = p.count.unwrap_or(1).clamp(1, 3);
+        let t = resolve_target(Some(&screen_index.to_string()), local_x as f64, local_y as f64)?;
+        self.input
+            .click_at(button, count, Some((t.global_x, t.global_y)))
+            .await?;
+        let mut v = t.describe("点击位置");
+        v["action"] = json!("click_text");
+        v["button"] = json!(button.as_str());
+        v["count"] = json!(count);
+        v["match"] = serde_json::to_value(&matched).unwrap_or(Value::Null);
+        ok_result(v)
+    }
+
+    async fn wait_for_text_impl(&self, p: WaitTextParams) -> DeskResult<CallToolResult> {
+        let sel = optional_window_sel(p.window);
+        let query = p.query;
+        let timeout = p.timeout_ms.unwrap_or(10_000);
+        let poll = p.poll_ms.unwrap_or(200);
+        let matched = tokio::task::spawn_blocking(move || {
+            text::wait_for_text(&query, sel.as_ref(), timeout, poll)
+        })
+        .await
+        .map_err(|e| DeskError::TextFind(format!("任务失败：{e}")))??;
+        ok_result(json!({ "action": "wait_for_text", "match": matched }))
+    }
+
+    async fn type_in_window_impl(&self, p: TypeInWindowParams) -> DeskResult<CallToolResult> {
+        if p.text.contains('\0') {
+            return Err(DeskError::InvalidArgument(
+                "text 不能包含空字符 \\0".into(),
+            ));
+        }
+        let interval = p.interval_ms.unwrap_or(0).min(5_000);
+        let text = p.text.clone();
+        let chars = text.chars().count();
+        let sel = p.sel.into_selector();
+
+        // 1) 聚焦窗口
+        let win = tokio::task::spawn_blocking(move || windows::focus_window(&sel))
+            .await
+            .map_err(|e| DeskError::WindowOp(format!("任务失败：{e}")))??;
+
+        // 2) 点击窗口中心：先把全局坐标换算为屏幕局部，再 resolve_target
+        //    （必须在 await 前丢弃 Screen，因其含非 Send 的 Monitor）
+        let center_gx = win.x + win.width as i32 / 2;
+        let center_gy = win.y + win.height as i32 / 2;
+        let click_pos = {
+            let screens_list = screens::all_screens()?;
+            if let Some(s) = screens_list.iter().find(|s| {
+                let w = s.info.width as i32;
+                let h = s.info.height as i32;
+                center_gx >= s.info.x
+                    && center_gx < s.info.x + w
+                    && center_gy >= s.info.y
+                    && center_gy < s.info.y + h
+            }) {
+                let lx = (center_gx - s.info.x) as f64;
+                let ly = (center_gy - s.info.y) as f64;
+                let t = resolve_target(Some(&s.index.to_string()), lx, ly)?;
+                (t.global_x, t.global_y)
+            } else {
+                (center_gx, center_gy)
+            }
+        };
+        self.input
+            .click_at(MouseButton::Left, 1, Some(click_pos))
+            .await?;
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+        // 3) 输入文本
+        self.input.text(text, interval).await?;
+        ok_result(json!({
+            "action": "type_in_window",
+            "chars": chars,
+            "interval_ms": interval,
+            "window": win,
+        }))
+    }
+
+    async fn clipboard_get_impl(&self) -> DeskResult<CallToolResult> {
+        let text = tokio::task::spawn_blocking(clipboard::get_text)
+            .await
+            .map_err(|e| DeskError::Clipboard(format!("任务失败：{e}")))??;
+        ok_result(json!({ "action": "clipboard_get", "text": text, "chars": text.chars().count() }))
+    }
+
+    async fn clipboard_set_impl(&self, p: ClipboardSetParams) -> DeskResult<CallToolResult> {
+        let text = p.text;
+        let chars = text.chars().count();
+        tokio::task::spawn_blocking(move || clipboard::set_text(&text))
+            .await
+            .map_err(|e| DeskError::Clipboard(format!("任务失败：{e}")))??;
+        ok_result(json!({ "action": "clipboard_set", "chars": chars }))
+    }
+}
+
+/// 可选窗口选择器：字段全空则不限定窗口
+fn optional_window_sel(p: WindowSelectParams) -> Option<WindowSelector> {
+    let sel = p.into_selector();
+    if sel.is_empty() {
+        None
+    } else {
+        Some(sel)
     }
 }
 

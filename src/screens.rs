@@ -216,6 +216,57 @@ impl Default for CaptureOptions {
     }
 }
 
+/// 把已有 RGBA 图按 CaptureOptions 缩放并编码（供窗口截图复用）
+pub fn encode_rgba(raw: &RgbaImage, opts: &CaptureOptions) -> DeskResult<(Vec<u8>, CaptureMeta)> {
+    let region_w = raw.width().max(1) as i64;
+    let region_h = raw.height().max(1) as i64;
+    let (image, _) = resize_for_output(raw, region_w, region_h, opts)?;
+
+    let mut buf: Vec<u8> = Vec::new();
+    match opts.format {
+        OutFormat::Jpeg => {
+            let rgb = image::DynamicImage::ImageRgba8(image.clone()).to_rgb8();
+            let mut encoder =
+                image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, opts.quality);
+            encoder
+                .encode(
+                    rgb.as_raw(),
+                    rgb.width(),
+                    rgb.height(),
+                    ExtendedColorType::Rgb8,
+                )
+                .map_err(|e| DeskError::Capture(format!("JPEG 编码失败：{e}")))?;
+        }
+        OutFormat::Png => {
+            image::DynamicImage::ImageRgba8(image.clone())
+                .write_to(&mut Cursor::new(&mut buf), ImgFormat::Png)
+                .map_err(|e| DeskError::Capture(format!("PNG 编码失败：{e}")))?;
+        }
+    }
+
+    let pixel_ratio = image.width() as f64 / region_w as f64;
+    let meta = CaptureMeta {
+        region: Region {
+            x: 0,
+            y: 0,
+            width: region_w as u32,
+            height: region_h as u32,
+        },
+        region_clamped: false,
+        image_width: image.width(),
+        image_height: image.height(),
+        pixel_ratio,
+        format: opts.format.as_str().to_string(),
+        quality: if opts.format == OutFormat::Jpeg {
+            opts.quality
+        } else {
+            0
+        },
+        byte_size: buf.len(),
+    };
+    Ok((buf, meta))
+}
+
 /// 截取指定屏幕的指定区域，返回编码后的图片字节与元信息
 pub fn capture(screen: &Screen, opts: &CaptureOptions) -> DeskResult<(Vec<u8>, CaptureMeta)> {
     let sw = screen.info.width as i64;
@@ -266,52 +317,15 @@ pub fn capture(screen: &Screen, opts: &CaptureOptions) -> DeskResult<(Vec<u8>, C
             ))
         })?;
 
-    let (image, _) = resize_for_output(&raw, w, h, opts)?;
-
-    let mut buf: Vec<u8> = Vec::new();
-    match opts.format {
-        OutFormat::Jpeg => {
-            let rgb = image::DynamicImage::ImageRgba8(image.clone()).to_rgb8();
-            let mut encoder =
-                image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, opts.quality);
-            encoder
-                .encode(
-                    rgb.as_raw(),
-                    rgb.width(),
-                    rgb.height(),
-                    ExtendedColorType::Rgb8,
-                )
-                .map_err(|e| DeskError::Capture(format!("JPEG 编码失败：{e}")))?;
-        }
-        OutFormat::Png => {
-            image::DynamicImage::ImageRgba8(image.clone())
-                .write_to(&mut Cursor::new(&mut buf), ImgFormat::Png)
-                .map_err(|e| DeskError::Capture(format!("PNG 编码失败：{e}")))?;
-        }
-    }
-
-    let pixel_ratio = image.width() as f64 / w as f64;
-    let meta = CaptureMeta {
-        region: Region {
-            x,
-            y,
-            width: w as u32,
-            height: h as u32,
-        },
-        region_clamped: clamped,
-        image_width: image.width(),
-        image_height: image.height(),
-        pixel_ratio,
-        format: opts.format.as_str().to_string(),
-        quality: if opts.format == OutFormat::Jpeg {
-            opts.quality
-        } else {
-            0
-        },
-        byte_size: buf.len(),
+    let (bytes, mut meta) = encode_rgba(&raw, opts)?;
+    meta.region = Region {
+        x,
+        y,
+        width: w as u32,
+        height: h as u32,
     };
-
-    Ok((buf, meta))
+    meta.region_clamped = clamped;
+    Ok((bytes, meta))
 }
 
 fn resize_for_output(

@@ -1,14 +1,12 @@
 //! 运行中的应用（进程）与窗口枚举
 
 use std::collections::HashMap;
-use std::panic::AssertUnwindSafe;
 
 use sysinfo::{ProcessesToUpdate, System};
-use xcap::Window;
 
 use crate::error::{DeskError, DeskResult};
-use crate::screens;
-use crate::types::{AppInfo, WindowInfo};
+use crate::types::AppInfo;
+use crate::windows;
 
 /// 排序字段
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,7 +84,7 @@ pub fn list_apps(q: &AppQuery) -> DeskResult<AppList> {
 
     let mut warnings: Vec<String> = Vec::new();
     let (windows_by_pid, windows_available) = if q.include_windows {
-        match collect_windows() {
+        match windows::collect_windows_by_pid() {
             Ok(map) => (map, true),
             Err(e) => {
                 warnings.push(e.to_string());
@@ -184,58 +182,6 @@ fn app_matches(a: &AppInfo, needle: &str) -> bool {
     a.windows.iter().any(|w| {
         w.title.to_lowercase().contains(needle) || w.app_name.to_lowercase().contains(needle)
     })
-}
-
-fn collect_windows() -> DeskResult<HashMap<u32, Vec<WindowInfo>>> {
-    let screen_ids: Vec<(u32, usize)> = match screens::all_screens() {
-        Ok(list) => list
-            .iter()
-            .map(|s| (s.info.id, s.index))
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-
-    // xcap 在个别平台/权限缺失时可能 panic，这里兜住，避免影响整个 MCP 连接
-    let windows = std::panic::catch_unwind(AssertUnwindSafe(Window::all))
-        .map_err(|_| DeskError::SystemInfo("枚举窗口时发生内部错误".into()))?
-        .map_err(|e| DeskError::SystemInfo(format!("枚举窗口失败：{e}")))?;
-
-    let mut map: HashMap<u32, Vec<WindowInfo>> = HashMap::new();
-    for w in windows {
-        let Ok(pid) = w.pid() else { continue };
-        let monitor_index = w
-            .current_monitor()
-            .ok()
-            .and_then(|m| m.id().ok())
-            .and_then(|id| {
-                screen_ids
-                    .iter()
-                    .find(|(sid, _)| *sid == id)
-                    .map(|(_, idx)| *idx)
-            });
-
-        let info = WindowInfo {
-            id: w.id().unwrap_or(0),
-            title: w.title().unwrap_or_default(),
-            app_name: w.app_name().unwrap_or_default(),
-            x: w.x().unwrap_or(0),
-            y: w.y().unwrap_or(0),
-            width: w.width().unwrap_or(0),
-            height: w.height().unwrap_or(0),
-            z: w.z().unwrap_or(0),
-            is_minimized: w.is_minimized().unwrap_or(false),
-            is_maximized: w.is_maximized().unwrap_or(false),
-            is_focused: w.is_focused().unwrap_or(false),
-            screen_index: monitor_index,
-        };
-        map.entry(pid).or_default().push(info);
-    }
-
-    for list in map.values_mut() {
-        list.sort_by_key(|w| w.z);
-    }
-
-    Ok(map)
 }
 
 #[cfg(test)]

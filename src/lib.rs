@@ -1,6 +1,6 @@
 //! a2desk —— 跨平台桌面控制 MCP 服务器
 //!
-//! 提供屏幕信息 / 截屏 / 鼠标 / 键盘 / 应用枚举等 MCP 工具，
+//! 提供屏幕信息 / 截屏 / 鼠标 / 键盘 / 应用与窗口控制 / 文本查找 / 剪贴板等 MCP 工具，
 //! 支持 Windows、macOS、Linux(X11)。
 //!
 //! 坐标系约定（所有鼠标工具与截屏 region 使用同一套坐标）：
@@ -10,12 +10,15 @@
 //! * macOS 上该坐标的单位是逻辑点(pt)，Windows/Linux 上是物理像素。
 
 pub mod apps;
+pub mod clipboard;
 pub mod error;
 pub mod input;
 pub mod screens;
 pub mod selftest;
 pub mod server;
+pub mod text;
 pub mod types;
+pub mod windows;
 
 pub const SERVER_NAME: &str = "a2desk";
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");

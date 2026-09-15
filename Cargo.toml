@@ -3,7 +3,7 @@ name = "a2desk"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
-description = "Cross-platform desktop control MCP server (screen, mouse, keyboard, apps)"
+description = "Cross-platform desktop control MCP server (screen, mouse, keyboard, apps, windows, text)"
 license = "MIT"
 default-run = "a2desk"
 
@@ -17,6 +17,7 @@ thiserror = "2"
 base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+cfg-if = "1"
 
 # Cross-platform desktop capture / monitor / window enumeration
 xcap = "0.9"
@@ -26,13 +27,31 @@ enigo = "0.6"
 sysinfo = "0.39"
 # JPEG / PNG encoding for screenshots
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# Clipboard get/set
+arboard = "3"
 
 [target.'cfg(windows)'.dependencies]
-# SetCursorPos: enigo 的绝对移动在 Windows 上只覆盖主屏，用它支持多显示器
+# 键鼠多屏定位 + 窗口控制（焦点/移动/缩放/显隐/关闭）
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
+# UI Automation：find_text / click_text 的无障碍树路径
+uiautomation = "0.24"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = { version = "0.3", features = ["NSRunningApplication", "NSApplication", "NSWorkspace"] }
+core-foundation = "0.10"
+core-graphics = "0.24"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# X11 窗口控制（移动/缩放/焦点/关闭）
+x11rb = { version = "0.13", default-features = true }
 
 [profile.release]
 lto = "thin"

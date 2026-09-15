@@ -1,7 +1,8 @@
 //! 真实的 MCP stdio 协议往返测试：启动编译好的 a2desk 二进制，
 //! 完成 initialize → tools/list → tools/call 全流程。
 //!
-//! 只调用只读工具（list_screens / screenshot / list_apps），不会操作鼠标键盘。
+//! 只调用只读工具（list_screens / screenshot / list_apps / list_windows / clipboard_get），
+//! 不会操作鼠标键盘或改动窗口。
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -180,6 +181,24 @@ fn mcp_stdio_roundtrip() {
         "keyboard_key_down",
         "keyboard_key_up",
         "list_apps",
+        "list_windows",
+        "focus_window",
+        "move_window",
+        "resize_window",
+        "set_window_bounds",
+        "set_window_screen",
+        "minimize_window",
+        "maximize_window",
+        "restore_window",
+        "close_window",
+        "screenshot_window",
+        "wait_for_window",
+        "find_text",
+        "click_text",
+        "wait_for_text",
+        "type_in_window",
+        "clipboard_get",
+        "clipboard_set",
     ] {
         assert!(names.contains(&expected.to_string()), "缺少工具 {expected}，实际: {names:?}");
     }
@@ -300,4 +319,29 @@ fn mcp_stdio_roundtrip() {
         json!({ "direction": "down", "amount": 9999 }),
     );
     assert_is_error(&result);
+
+    // 10. list_windows：只读枚举
+    let result = call(
+        &mut client,
+        10,
+        "list_windows",
+        json!({ "limit": 20, "only_visible": true }),
+    );
+    assert_not_error(&result);
+    let wins = structured(&result);
+    assert!(
+        wins["windows"].as_array().is_some(),
+        "应返回 windows 数组: {wins}"
+    );
+    assert!(wins["count"].as_u64().is_some());
+
+    // 11. clipboard_get：只读；空剪贴板在部分平台会报错，只要进程不崩即可
+    let result = call(&mut client, 11, "clipboard_get", json!({}));
+    if result.pointer("/result/isError").and_then(Value::as_bool) != Some(true) {
+        let clip = structured(&result);
+        assert!(
+            clip.get("text").and_then(Value::as_str).is_some(),
+            "成功时应含 text 字段: {clip}"
+        );
+    }
 }

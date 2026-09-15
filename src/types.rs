@@ -75,11 +75,22 @@ pub struct CaptureMeta {
     pub byte_size: usize,
 }
 
+/// 窗口在所属屏幕上的可见矩形（相对该屏幕左上角的局部坐标）。
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct VisibleBounds {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// 窗口信息
 #[derive(Debug, Clone, Serialize)]
 pub struct WindowInfo {
-    /// 窗口 ID
+    /// 窗口 ID（Windows≈HWND 截断为 u32；macOS=CGWindowID；Linux=XID）
     pub id: u32,
+    /// 所属进程 ID
+    pub pid: u32,
     /// 窗口标题（macOS 未授予录屏权限时可能为空）
     pub title: String,
     /// 应用名
@@ -92,7 +103,7 @@ pub struct WindowInfo {
     pub width: u32,
     /// 窗口高度
     pub height: u32,
-    /// 窗口层级
+    /// 窗口层级（越大越靠前）
     pub z: i32,
     /// 是否最小化
     pub is_minimized: bool,
@@ -102,6 +113,8 @@ pub struct WindowInfo {
     pub is_focused: bool,
     /// 窗口所在屏幕的索引（对应 `list_screens`）
     pub screen_index: Option<usize>,
+    /// 相对所属屏幕的可见区域（窗口移出屏幕时会小于完整宽高）
+    pub visible_bounds: Option<VisibleBounds>,
 }
 
 /// 进程（应用）信息
@@ -127,4 +140,31 @@ pub struct AppInfo {
     pub start_time: u64,
     /// 该进程拥有的窗口
     pub windows: Vec<WindowInfo>,
+}
+
+/// 文本命中结果（屏幕坐标，便于直接喂给 mouse_*）
+#[derive(Debug, Clone, Serialize)]
+pub struct TextMatch {
+    /// 匹配到的文本
+    pub text: String,
+    /// 命中框左上角 X（虚拟桌面绝对坐标）
+    pub global_x: i32,
+    /// 命中框左上角 Y（虚拟桌面绝对坐标）
+    pub global_y: i32,
+    /// 命中框宽度
+    pub width: u32,
+    /// 命中框高度
+    pub height: u32,
+    /// 中心点 X（绝对）
+    pub center_x: i32,
+    /// 中心点 Y（绝对）
+    pub center_y: i32,
+    /// 所在屏幕索引
+    pub screen_index: Option<usize>,
+    /// 相对该屏幕的局部中心 X
+    pub local_x: Option<i32>,
+    /// 相对该屏幕的局部中心 Y
+    pub local_y: Option<i32>,
+    /// 来源：accessibility / ocr
+    pub source: String,
 }

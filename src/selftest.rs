@@ -141,6 +141,35 @@ pub async fn run(cfg: Config) -> ExitCode {
         }
     }
 
+    // 5. 窗口列表
+    println!("== 窗口 ==");
+    match crate::windows::list_windows(&crate::windows::WindowQuery {
+        limit: 5,
+        only_visible: true,
+        ..Default::default()
+    }) {
+        Ok(list) => {
+            println!("  可见窗口（最多 5 条）：{}", list.len());
+            for w in &list {
+                println!(
+                    "  id={} pid={} \"{}\" @({},{}) {}x{} screen={:?}",
+                    w.id, w.pid, w.title, w.x, w.y, w.width, w.height, w.screen_index
+                );
+            }
+        }
+        Err(e) => {
+            println!("  失败：{e}");
+            failures.push(format!("窗口枚举失败：{e}"));
+        }
+    }
+
+    // 6. 剪贴板（只读探测）
+    println!("== 剪贴板 ==");
+    match crate::clipboard::get_text() {
+        Ok(t) => println!("  可读，当前文本长度={}", t.chars().count()),
+        Err(e) => println!("  暂不可用（可忽略）：{e}"),
+    }
+
     println!();
     if failures.is_empty() {
         println!("self-test 通过 ✅");

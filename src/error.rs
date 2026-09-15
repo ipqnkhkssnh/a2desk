@@ -9,6 +9,9 @@ pub enum DeskError {
     #[error("找不到指定的屏幕：{0}")]
     ScreenNotFound(String),
 
+    #[error("找不到指定的窗口：{0}")]
+    WindowNotFound(String),
+
     #[error("参数错误：{0}")]
     InvalidArgument(String),
 
@@ -20,6 +23,18 @@ pub enum DeskError {
 
     #[error("获取系统信息失败：{0}")]
     SystemInfo(String),
+
+    #[error("窗口操作失败：{0}")]
+    WindowOp(String),
+
+    #[error("剪贴板操作失败：{0}")]
+    Clipboard(String),
+
+    #[error("文本查找失败：{0}")]
+    TextFind(String),
+
+    #[error("等待超时：{0}")]
+    Timeout(String),
 
     #[error("输入控制线程已退出，无法执行输入操作")]
     InputWorkerGone,
@@ -42,6 +57,8 @@ impl DeskError {
         match self {
             DeskError::Input(m) => DeskError::Input(format!("{m}\n提示：{hint}")),
             DeskError::Capture(m) => DeskError::Capture(format!("{m}\n提示：{hint}")),
+            DeskError::WindowOp(m) => DeskError::WindowOp(format!("{m}\n提示：{hint}")),
+            DeskError::TextFind(m) => DeskError::TextFind(format!("{m}\n提示：{hint}")),
             other => other,
         }
     }
