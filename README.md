@@ -22,11 +22,13 @@
 | `mouse_drag` | 拖拽：按下 → 移动 → 松开，支持跨屏 | `from_screen/from_x/from_y`、`to_screen/to_x/to_y`、`button`(left/right)、`duration_ms` |
 | `mouse_scroll` | 滚轮滚动 | `screen`、`x`、`y`(可选，先移过去)、`direction`(up/down/left/right)、`amount`(**1–100**) |
 | `mouse_position` | 当前鼠标位置及其所在屏幕 | — |
-| `keyboard_type` | 输入文本（支持 Unicode） | `text`、`interval_ms` |
+| `keyboard_type` | 输入文本（支持 Unicode）；中文 IME 下拉丁文易被吞，请改用 `paste_text` | `text`、`interval_ms` |
+| `paste_text` | 剪贴板粘贴（Ctrl/Cmd+V），绕过输入法 | `text`、`restore_clipboard` |
 | `keyboard_press` | 按键 / 组合键（按下并松开） | `keys`（`["Enter"]`、`["ctrl+shift+s"]`）、`repeat`、`interval_ms` |
 | `keyboard_key_down` | 按下不松开（长按/组合键） | `keys` |
 | `keyboard_key_up` | 松开按键，`["all"]` 松开全部 | `keys` |
 | `list_apps` | 正在运行的程序（pid/名称/路径/命令行/CPU/内存/窗口） | `filter`、`pids`、`include_windows`、`only_with_windows`、`sort_by`、`limit` |
+| `launch_app` | 启动应用（路径 / .lnk|.app / 开始菜单名）；可 wait_window + screen | `target`、`args`、`cwd`、`wait_window`、`window_query`、`screen`、`timeout_ms` |
 | `list_windows` | 扁平窗口列表（含可见区域、所在屏幕） | `filter`、`pid`、`screen_index`、`only_visible`、`sort_by`、`limit` |
 | `focus_window` | 激活/前置窗口 | `id` / `title` / `pid` / `app_name` / `focused` |
 | `move_window` | 移动窗口（**虚拟桌面绝对坐标**） | 选择器 + `x`、`y` |
@@ -48,11 +50,14 @@
 
 ### 窗口编排
 
-窗口选择器字段（多数窗口工具通用，可组合）：`id` / `title` / `pid` / `app_name` / `focused`。
+窗口选择器字段（多数窗口工具通用，可组合）：`id` / `title` / `pid` / `app_name` / `query` / `focused`。
+
+* `title` / `app_name`：字段内可用 `|` 表示多关键字 OR（如 `优优|YouYou`）
+* `query`：对 **title / app_name / process_name** 任一命中（也支持 `|`），推荐用来找「显示名与进程名不一致」的应用
 
 | 工具 | 说明 |
 | --- | --- |
-| `list_windows` | 扁平列出顶层窗口（含 `visible_bounds`、所在屏幕） |
+| `list_windows` | 扁平列出顶层窗口（含 `visible_bounds`、`process_name`、所在屏幕） |
 | `focus_window` | 激活到前台 |
 | `move_window` | 移动到虚拟桌面绝对坐标 `(x,y)` |
 | `resize_window` | 调整宽高 |

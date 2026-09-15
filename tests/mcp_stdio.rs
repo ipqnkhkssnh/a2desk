@@ -177,6 +177,7 @@ fn mcp_stdio_roundtrip() {
         "mouse_scroll",
         "mouse_position",
         "keyboard_type",
+        "paste_text",
         "keyboard_press",
         "keyboard_key_down",
         "keyboard_key_up",
@@ -199,6 +200,7 @@ fn mcp_stdio_roundtrip() {
         "type_in_window",
         "clipboard_get",
         "clipboard_set",
+        "launch_app",
     ] {
         assert!(names.contains(&expected.to_string()), "缺少工具 {expected}，实际: {names:?}");
     }
@@ -344,4 +346,34 @@ fn mcp_stdio_roundtrip() {
             "成功时应含 text 字段: {clip}"
         );
     }
+
+    // 12. launch_app：无效目标应返回工具级错误
+    let result = call(
+        &mut client,
+        12,
+        "launch_app",
+        json!({ "target": "___no_such_app_a2desk_xyz___" }),
+    );
+    assert_is_error(&result);
+
+    // 13. wait_for_window 超时应带相近窗口提示（极短超时）
+    let result = call(
+        &mut client,
+        13,
+        "wait_for_window",
+        json!({
+            "query": "___no_such_window_a2desk_xyz___",
+            "timeout_ms": 300,
+            "poll_ms": 100
+        }),
+    );
+    assert_is_error(&result);
+    let err_text = result
+        .pointer("/result/content/0/text")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    assert!(
+        err_text.contains("相近窗口") || err_text.contains("超时"),
+        "超时错误应含提示: {err_text}"
+    );
 }

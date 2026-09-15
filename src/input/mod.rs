@@ -119,6 +119,13 @@ enum Request {
         interval_ms: u64,
         reply: Reply<()>,
     },
+    /// 经剪贴板粘贴文本（绕过 IME）
+    Paste {
+        text: String,
+        /// 粘贴后是否恢复原剪贴板
+        restore: bool,
+        reply: Reply<()>,
+    },
     Chord {
         keys: Vec<Key>,
         repeat: u32,
@@ -260,6 +267,16 @@ impl InputHandle {
         .await
     }
 
+    /// 通过剪贴板粘贴文本（绕过输入法，适合中文环境输入 ASCII/Unicode）
+    pub async fn paste(&self, text: String, restore_clipboard: bool) -> DeskResult<()> {
+        self.request(|reply| Request::Paste {
+            text,
+            restore: restore_clipboard,
+            reply,
+        })
+        .await
+    }
+
     /// 组合键点击
     pub async fn chord(&self, keys: Vec<Key>, repeat: u32, interval_ms: u64) -> DeskResult<()> {
         self.request(|reply| Request::Chord {
@@ -360,6 +377,14 @@ impl Worker {
                 reply,
             } => {
                 let r = self.do_text(&text, interval_ms);
+                let _ = reply.send(r);
+            }
+            Request::Paste {
+                text,
+                restore,
+                reply,
+            } => {
+                let r = self.do_paste(&text, restore);
                 let _ = reply.send(r);
             }
             Request::Chord {
@@ -502,6 +527,34 @@ impl Worker {
             thread::sleep(Duration::from_millis(interval_ms));
         }
         Ok(())
+    }
+
+    /// 写入剪贴板后发送粘贴快捷键，绕过 IME（中文输入法下 keyboard_type 拉丁文易被吞）
+    fn do_paste(&mut self, text: &str, restore: bool) -> DeskResult<()> {
+        if text.contains('\0') {
+            return Err(DeskError::InvalidArgument(
+                "粘贴文本不能包含空字符 \\0".into(),
+            ));
+        }
+        let old = crate::clipboard::get_text().ok();
+        crate::clipboard::set_text(text)?;
+        // 给剪贴板一点同步时间
+        thread::sleep(Duration::from_millis(40));
+
+        #[cfg(target_os = "macos")]
+        let keys = vec![Key::Meta, Key::Unicode('v')];
+        #[cfg(not(target_os = "macos"))]
+        let keys = vec![Key::Control, Key::Unicode('v')];
+
+        let paste_result = self.do_chord(&keys, 1, 0);
+        thread::sleep(Duration::from_millis(60));
+
+        if restore {
+            if let Some(old) = old {
+                let _ = crate::clipboard::set_text(&old);
+            }
+        }
+        paste_result
     }
 
     fn do_chord(&mut self, keys: &[Key], repeat: u32, interval_ms: u64) -> DeskResult<()> {

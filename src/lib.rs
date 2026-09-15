@@ -13,6 +13,7 @@ pub mod apps;
 pub mod clipboard;
 pub mod error;
 pub mod input;
+pub mod launch;
 pub mod screens;
 pub mod selftest;
 pub mod server;

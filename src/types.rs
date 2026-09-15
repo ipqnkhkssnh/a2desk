@@ -91,6 +91,9 @@ pub struct WindowInfo {
     pub id: u32,
     /// 所属进程 ID
     pub pid: u32,
+    /// 进程名（如 `agent-app.exe` / `Cursor`），枚举时尽力填充
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_name: Option<String>,
     /// 窗口标题（macOS 未授予录屏权限时可能为空）
     pub title: String,
     /// 应用名

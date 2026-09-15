@@ -13,6 +13,7 @@ use crate::apps::{self, AppQuery, AppSort};
 use crate::clipboard;
 use crate::error::{DeskError, DeskResult, ToolResult};
 use crate::input::{parse_key_group, InputHandle, MouseButton, ScrollDir, MAX_SCROLL_AMOUNT};
+use crate::launch::{self, LaunchRequest};
 use crate::screens::{self, CaptureOptions, OutFormat};
 use crate::text;
 use crate::types::Region;
@@ -165,10 +166,20 @@ struct MouseScrollParams {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct TypeParams {
     /// 要输入的文本（支持 Unicode；不能包含空字符 \\0）
+    /// 注意：中文 IME 开启时，拉丁字母可能被当成拼音；此时请改用 paste_text。
     text: String,
     /// 每个字符之间的间隔（毫秒），0（默认）= 一次性快速输入
     #[serde(default)]
     interval_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct PasteTextParams {
+    /// 要粘贴的文本（经剪贴板 + Ctrl/Cmd+V，绕过输入法）
+    text: String,
+    /// 粘贴后是否恢复原剪贴板内容，默认 true
+    #[serde(default)]
+    restore_clipboard: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -217,15 +228,18 @@ struct WindowSelectParams {
     /// 窗口 id（list_windows / list_apps 返回）
     #[serde(default)]
     id: Option<u32>,
-    /// 标题子串（大小写不敏感）
+    /// 标题子串（大小写不敏感；可用 `|` 分隔多关键字，字段内 OR）
     #[serde(default)]
     title: Option<String>,
     /// 进程 pid
     #[serde(default)]
     pid: Option<u32>,
-    /// 应用名子串
+    /// 应用名子串（可用 `|`）
     #[serde(default)]
     app_name: Option<String>,
+    /// 模糊查询：匹配 title / app_name / process_name（`|` = OR）。例如 `YouYou|优优`
+    #[serde(default)]
+    query: Option<String>,
     /// 只要当前焦点窗口
     #[serde(default)]
     focused: Option<bool>,
@@ -234,8 +248,39 @@ struct WindowSelectParams {
 impl WindowSelectParams {
     /// 拼装窗口选择器（复用 windows::selector_from_params）
     fn into_selector(self) -> WindowSelector {
-        windows::selector_from_params(self.id, self.title, self.pid, self.app_name, self.focused)
+        windows::selector_from_params(
+            self.id,
+            self.title,
+            self.pid,
+            self.app_name,
+            self.query,
+            self.focused,
+        )
     }
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct LaunchAppParams {
+    /// 可执行绝对路径、.lnk/.app、或开始菜单/应用显示名（如 `优优`、`Notepad`）
+    target: String,
+    /// 命令行参数
+    #[serde(default)]
+    args: Option<Vec<String>>,
+    /// 工作目录
+    #[serde(default)]
+    cwd: Option<String>,
+    /// 启动后是否等待窗口出现，默认 false
+    #[serde(default)]
+    wait_window: Option<bool>,
+    /// 等待窗口用的 query（默认取文件名/target）；支持 `A|B`
+    #[serde(default)]
+    window_query: Option<String>,
+    /// 等到窗口后移到该屏幕（索引/名称/primary）
+    #[serde(default, deserialize_with = "de_screen")]
+    screen: Option<String>,
+    /// 等待窗口超时毫秒，默认 15000
+    #[serde(default)]
+    timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -501,11 +546,23 @@ impl A2DeskServer {
     /// 输入文本
     #[tool(
         name = "keyboard_type",
-        description = "键盘输入文本：支持 Unicode，可选 interval_ms 控制逐字输入速度（0=最快）。",
+        description = "键盘输入文本：支持 Unicode，可选 interval_ms 控制逐字输入速度（0=最快）。注意：中文 IME 开启时拉丁字母可能被当成拼音；检索/输入 ASCII 或需绕过输入法时请用 paste_text。",
         annotations(title = "输入文本", read_only_hint = false, open_world_hint = false)
     )]
     async fn keyboard_type(&self, Parameters(p): Parameters<TypeParams>) -> ToolResult {
         self.keyboard_type_impl(p).await.map_err(DeskError::into_tool_error)
+    }
+
+    /// 经剪贴板粘贴（绕过 IME）
+    #[tool(
+        name = "paste_text",
+        description = "粘贴文本：写入剪贴板后发送 Ctrl+V（macOS 为 Cmd+V），绕过输入法。适合中文环境下输入英文应用名、Unicode、开始菜单搜索等。默认粘贴后恢复原剪贴板。",
+        annotations(title = "粘贴文本", read_only_hint = false, open_world_hint = false)
+    )]
+    async fn paste_text(&self, Parameters(p): Parameters<PasteTextParams>) -> ToolResult {
+        self.paste_text_impl(p)
+            .await
+            .map_err(DeskError::into_tool_error)
     }
 
     /// 按键 / 组合键（按下并松开）
@@ -752,12 +809,23 @@ impl A2DeskServer {
             .await
             .map_err(DeskError::into_tool_error)
     }
+
+    #[tool(
+        name = "launch_app",
+        description = "启动应用：支持绝对路径、.lnk/.app、开始菜单/应用显示名。可选 wait_window 等待窗口、window_query（支持 A|B）、screen 移到指定屏。",
+        annotations(title = "启动应用", read_only_hint = false, open_world_hint = false)
+    )]
+    async fn launch_app(&self, Parameters(p): Parameters<LaunchAppParams>) -> ToolResult {
+        self.launch_app_impl(p)
+            .await
+            .map_err(DeskError::into_tool_error)
+    }
 }
 
 #[tool_handler(
     router = self.tool_router,
     name = "a2desk",
-    instructions = "a2desk 桌面控制：截屏、鼠标、键盘、应用/窗口编排、无障碍文本查找、剪贴板。鼠标与截屏 region 使用屏幕内局部坐标；窗口 move 使用虚拟桌面绝对坐标。推荐：list_screens -> list_windows/focus_window/set_window_screen -> find_text/click_text 或 screenshot -> mouse_click。"
+    instructions = "a2desk 桌面控制：截屏、鼠标、键盘、启动应用、窗口编排、无障碍文本查找、剪贴板。中文 IME 下拉丁文输入请用 paste_text。窗口匹配可用 query（如 YouYou|优优）。推荐：launch_app(wait_window,screen) 或 list_windows -> focus_window/set_window_screen -> paste_text/find_text。"
 )]
 impl rmcp::ServerHandler for A2DeskServer {}
 
@@ -1077,6 +1145,23 @@ impl A2DeskServer {
             "action": "keyboard_type",
             "chars": len,
             "interval_ms": interval,
+            "ime_note": "若出现拼音吞字，请改用 paste_text",
+        }))
+    }
+
+    async fn paste_text_impl(&self, p: PasteTextParams) -> DeskResult<CallToolResult> {
+        if p.text.contains('\0') {
+            return Err(DeskError::InvalidArgument(
+                "text 不能包含空字符 \\0".into(),
+            ));
+        }
+        let restore = p.restore_clipboard.unwrap_or(true);
+        let chars = p.text.chars().count();
+        self.input.paste(p.text, restore).await?;
+        ok_result(json!({
+            "action": "paste_text",
+            "chars": chars,
+            "restore_clipboard": restore,
         }))
     }
 
@@ -1430,6 +1515,22 @@ impl A2DeskServer {
             .await
             .map_err(|e| DeskError::Clipboard(format!("任务失败：{e}")))??;
         ok_result(json!({ "action": "clipboard_set", "chars": chars }))
+    }
+
+    async fn launch_app_impl(&self, p: LaunchAppParams) -> DeskResult<CallToolResult> {
+        let req = LaunchRequest {
+            target: p.target,
+            args: p.args.unwrap_or_default(),
+            cwd: p.cwd.map(std::path::PathBuf::from),
+            wait_window: p.wait_window.unwrap_or(false),
+            window_query: p.window_query,
+            screen: p.screen,
+            timeout_ms: p.timeout_ms.unwrap_or(15_000),
+        };
+        let result = tokio::task::spawn_blocking(move || launch::launch_app(&req))
+            .await
+            .map_err(|e| DeskError::SystemInfo(format!("任务失败：{e}")))??;
+        ok_result(serde_json::to_value(result).unwrap_or(Value::Null))
     }
 }
 

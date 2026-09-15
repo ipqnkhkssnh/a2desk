@@ -72,6 +72,7 @@ pub fn selector_from_params(
     title: Option<String>,
     pid: Option<u32>,
     app_name: Option<String>,
+    query: Option<String>,
     focused: Option<bool>,
 ) -> WindowSelector {
     WindowSelector {
@@ -79,6 +80,7 @@ pub fn selector_from_params(
         title,
         pid,
         app_name,
+        query,
         focused: focused.unwrap_or(false),
     }
 }
